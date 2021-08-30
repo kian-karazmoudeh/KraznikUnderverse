@@ -1,6 +1,6 @@
 import smartpy as sp
 
-
+# Error_message class is used to generate error messages throughout the contract
 class Error_message:
     def __init__(self):
         self.prefix = "FA2_"
@@ -15,7 +15,7 @@ class Error_message:
     def not_admin_or_operator(self): return self.make("NOT_ADMIN_OR_OPERATOR")
     def paused(self): return self.make("PAUSED")
 
-
+# Kraznik_error_message is a class used to generate error messages specific to the Kraznik NFT contract
 class Kraznik_error_message:
     def __init__(self):
         self.prefix = "Kraznik_"
@@ -31,24 +31,6 @@ class Kraznik_error_message:
         "INSUFFICIENT_AMOUNT_PAID")
 
     def invalid(self): return self.make("INVALID")
-
-
-# The current type for a batched transfer in the specification is as
-# follows:
-##
-# ```ocaml
-# type transfer = {
-##   from_ : address;
-# txs: {
-##     to_ : address;
-##     token_id : token_id;
-##     amount : nat;
-# } list
-# } list
-# ```
-##
-# This class provides helpers to create and force the type of such elements.
-# It uses the `FA2_config` to decide whether to set the right-comb layouts.
 
 
 class Batch_transfer:
@@ -75,12 +57,7 @@ class Batch_transfer:
         v = sp.record(from_=from_, txs=txs)
         return sp.set_type_expr(v, self.get_transfer_type())
 
-# The class `Ledger_key` defines the key type for the main ledger (big-)map:
-##
-# - In *“Babylon mode”* we also have to call `sp.pack`.
-# - In *“single-asset mode”* we can just use the user's address.
-
-
+# Ledger_key class is used to store the mapping between owner addresses and token IDs
 class Ledger_key:
     def get_type(self):
         return sp.TRecord(owner=sp.TAddress, token_id=sp.TNat).layout(("owner", "token_id"))
@@ -88,7 +65,7 @@ class Ledger_key:
     def make(self, owner, token_id):
         return sp.set_type_expr(sp.record(owner=owner, token_id=token_id), self.get_type())
 
-
+#Balance_of class is used to handle all calls made to query the token balances of addresses
 class Balance_of:
     def request_type():
         return sp.TRecord(
@@ -212,6 +189,7 @@ class KraznikCollections(sp.Contract):
         # we have to make assignment of tokenUris to tokenIds random (frontend)
         # rather than non-consecutive minting of token-ids
 
+    
 
 @sp.add_test(name="Demo")
 def test():
