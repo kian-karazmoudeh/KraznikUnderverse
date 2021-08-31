@@ -84,41 +84,59 @@ class Balance_of:
             requests=sp.TList(Balance_of.request_type())
         ).layout(("requests", "callback"))
 
-
-class Token_meta_data:
-    def get_type():
-        return sp.TRecord(token_id=sp.TNat, token_info=sp.TMap(sp.TString, sp.TBytes)).layout(("token_id", "token_info"))
-
-
-class Token_value:
+#Attributes contains the list of traits, along with their values and rarities
+class Attributes:
     def get_type(self):
-        return sp.TRecord(
-            name=sp.TString,
-            description=sp.TString,
-            tokenUri=sp.TString
-        )
+        return sp.TRecord(name=sp.TString, value=sp.TString, rarity=sp.TNat)
+    def make(self, attributes):
+        attributes_list = sp.local("Attributes_List", sp.list(l=[], t=self.get_type()))
+        sp.for attr in attributes:
+            attributes_list.value.push(attr)
+        return attributes_list.value
 
 
+
+#Tags contains the list of tags that describe the subject or content of the asset.
+class Tags:
+    def get_type(self):
+        return sp.TList(t=sp.TString)
+    def make(self, tags):
+        return sp.set_type_expr(tags, self.get_type())
+
+# Token metadata containing the following fields - 
+# 1. Token id
+# 2. Description
+# 3. Date
+# 4. Tags
+# 5. Artifact URI
+# 6. Attributes
+class Token_meta_data:
+    def get_type(self):
+        attributes_inst = Attributes()
+        tags_inst = Tags()
+        return sp.TRecord(token_id=sp.TNat, description=sp.TString, date=sp.TTimestamp, artifactUri=sp.TString, tags=tags_inst.get_type(), attributes=sp.TList(attributes_inst.get_type()))
+    def make(self, token_metadata):
+        return sp.set_type_expr(token_metadata, self.get_type())
+
+#KraznikCollections is the core contract in the application - Consists of an ownership ledger, token_meta_data map
 class KraznikCollections(sp.Contract):
     def __init__(self, metadata, admin):
         self.ledger_key = Ledger_key()
         self.error_message = Error_message()
         self.kraznik_error_message = Kraznik_error_message()
+        self.token_meta_data = Token_meta_data()
         self.init(
             ledger=sp.big_map(tkey=self.ledger_key.get_type(), tvalue=sp.TNat),
-            token_meta_data=sp.big_map(
-                tkey=sp.TNat, tvalue=Token_meta_data.get_type()),
             paused=False,
             administrator=admin,
-            metadata=metadata,  # contract metadata
+            metadata=metadata,      #Core Contract Metadata
             all_tokens=sp.set(t=sp.TNat),
-            # Token_value should follow the TZIP-21 standard
-            # tokens=sp.big_map(tkey=sp.TNat, tvalue=Token_value.get_type()),
-            MAX_SUPPLY=10000,
-            MAX_PURCHASE=2,
-            AMOUNT_RESERVED=100,  # for team members
-            MINT_PRICE=sp.tez(69),
-            RENAME_PRICE=sp.tez(1),  # we can make the first rename free
+            tokens = sp.big_map(tkey=sp.TNat, tvalue=self.token_meta_data.get_type()),
+            MAX_SUPPLY=10000,       #Maximum supply quantity of the NFTs
+            MAX_PURCHASE=2,         #Maximum purchase allowed for each user
+            AMOUNT_RESERVED=100,    #Number of NFTs reserved for the team members
+            MINT_PRICE=sp.tez(69),  #Initial mint price of the NFTs (in XTZ)
+            RENAME_PRICE=sp.tez(1), #Price needed to rename the NFTs
         )
 
     def is_administrator(self, sender):
@@ -139,32 +157,20 @@ class KraznikCollections(sp.Contract):
                   message=self.error_message.not_owner())
         self.data.paused = params
 
-    def make_metadata(name, symbol, tokenUri):
-        "Helper function to build metadata JSON bytes values."
-        return (sp.map(
-            l={
-                "name": sp.utils.bytes_of_string(name),
-                "symbol": sp.utils.bytes_of_string(symbol),
-                # "decimals": sp.utils.bytes_of_string("%d" % decimals),
-                "tokenUri": sp.utils.bytes_of_string(tokenUri)
-            },
-            # tkey=sp.TString,
-            # tvalue=sp.TString
-        ))
-
+    #Function to "mint" an NFT - verifies that the contract is not paused
     @sp.entry_point
-    def mint(self, token_metadatas, purchase_quantity):
+    def mint(self, tokens_metadata, purchase_quantity):
         sp.verify(~self.is_paused(), self.error_message.paused())
-        # anyone can mint the tokens
-
-        sp.set_type(token_metadatas, sp.TList(sp.TMap(sp.TString, sp.TBytes)))
+        
+        #Sets the type for the "purchase quantity" and "token metadata" for multiple tokens
+        sp.set_type(tokens_metadata, sp.TList(self.token_meta_data.get_type()))
         sp.set_type(purchase_quantity, sp.TNat)
 
         # token_id starting from 0-9999
         token_id = sp.len(self.data.all_tokens)
         
         sp.verify(purchase_quantity > 0)
-        sp.verify(sp.len(token_metadatas) == purchase_quantity,
+        sp.verify(sp.len(tokens_metadata) == purchase_quantity,
                   message=self.kraznik_error_message.invalid())
         sp.verify(purchase_quantity <= self.data.MAX_PURCHASE,
                   message=self.kraznik_error_message.cant_purchase_more())
@@ -172,17 +178,12 @@ class KraznikCollections(sp.Contract):
                   message=self.kraznik_error_message.exceeded_max_supply())
         sp.verify(sp.amount == sp.mul(purchase_quantity, self.data.MINT_PRICE),
                   message=self.kraznik_error_message.insufficient_amount_paid())
-
-        sp.for token_metadata in token_metadatas:
+        sp.for token_metadata in tokens_metadata:
             token_id = sp.len(self.data.all_tokens)
             user = self.ledger_key.make(sp.sender, token_id)
-            self.data.ledger[user] = 1  # non-fungible
-            self.data.token_meta_data[token_id] = sp.record(
-                token_id=token_id, token_info=token_metadata
-            )
-            # self.data.tokens[token_id] = sp.record(
-
-            # )
+            self.data.ledger[user] = 1
+            #Compute hash of metadata object and check if hash of token_metadata exsist
+            self.data.tokens[token_id] = self.token_meta_data.make(token_metadata)
             self.data.all_tokens.add(token_id)
 
         # we have to add tokenUri to the token metadata => TZIP-21
@@ -209,13 +210,11 @@ def test():
     scenario += c1
     scenario.h2("Initial minting")
     scenario.p("Alice mints 1 token - token_id=0")
-    tok0_md = KraznikCollections.make_metadata(
-        name = "Kangaroo0",
-        symbol = "Kq0",
-        tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
-    )
+    tags = sp.list(l = ["tag1","tag2"])
+    attributes = [sp.record(name="colour",value="Blue",rarity=100)]
+    tok0_md = sp.record(token_id=0, description=sp.string("Kangaroo"), artifactUri=sp.string("ipfsURL"), date=sp.timestamp(1630402450),tags=tags, attributes=attributes)
     c1.mint(
-        token_metadatas = sp.list([tok0_md]),
+        tokens_metadata = [tok0_md],
         purchase_quantity = 1
     ).run(sender = alice, amount = sp.tez(69), valid = True)
 
@@ -226,53 +225,53 @@ def test():
     #     purchase_quantity = 1
     # ).run(sender = alice, amount = sp.tez(69), valid = True)
 
-    scenario.p("Bob mints 2 token - token_id = 1,2")
-    tok1_md = KraznikCollections.make_metadata(
-        name = "Kangaroo1",
-        symbol = "Kq1",
-        tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
-    )
-    tok2_md = KraznikCollections.make_metadata(
-        name = "Kangaroo2",
-        symbol = "Kq2",
-        tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
-    )
-    c1.mint(
-        token_metadatas = sp.list([tok1_md, tok2_md]),
-        purchase_quantity = 2
-    ).run(sender = bob, amount = sp.tez(69*2), valid = True)
+    # scenario.p("Bob mints 2 token - token_id = 1,2")
+    # tok1_md = KraznikCollections.make_metadata(
+    #     name = "Kangaroo1",
+    #     symbol = "Kq1",
+    #     tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
+    # )
+    # tok2_md = KraznikCollections.make_metadata(
+    #     name = "Kangaroo2",
+    #     symbol = "Kq2",
+    #     tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
+    # )
+    # c1.mint(
+    #     token_metadatas = sp.list([tok1_md, tok2_md]),
+    #     purchase_quantity = 2
+    # ).run(sender = bob, amount = sp.tez(69*2), valid = True)
 
-    scenario.p("Alice mints 2 token, with - token_id = 3,4, she already has token_id = 0")
-    tok3_md = KraznikCollections.make_metadata(
-        name = "Kangaroo1",
-        symbol = "Kq1",
-        tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
-    )
-    tok4_md = KraznikCollections.make_metadata(
-        name = "Kangaroo2",
-        symbol = "Kq2",
-        tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
-    )
-    c1.mint(
-        token_metadatas = sp.list([tok3_md, tok4_md]),
-        purchase_quantity = 2
-    ).run(sender = alice, amount = sp.tez(69*2), valid=True)
+    # scenario.p("Alice mints 2 token, with - token_id = 3,4, she already has token_id = 0")
+    # tok3_md = KraznikCollections.make_metadata(
+    #     name = "Kangaroo1",
+    #     symbol = "Kq1",
+    #     tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
+    # )
+    # tok4_md = KraznikCollections.make_metadata(
+    #     name = "Kangaroo2",
+    #     symbol = "Kq2",
+    #     tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
+    # )
+    # c1.mint(
+    #     token_metadatas = sp.list([tok3_md, tok4_md]),
+    #     purchase_quantity = 2
+    # ).run(sender = alice, amount = sp.tez(69*2), valid=True)
 
-    scenario.p("Alice mints 2 token, but do not send right amount of tez, with - token_id = 3,4")
-    c1.mint(
-        token_metadatas = sp.list([tok3_md, tok4_md]),
-        purchase_quantity = 2
-    ).run(sender = alice, amount = sp.tez(69), valid=False)
+    # scenario.p("Alice mints 2 token, but do not send right amount of tez, with - token_id = 3,4")
+    # c1.mint(
+    #     token_metadatas = sp.list([tok3_md, tok4_md]),
+    #     purchase_quantity = 2
+    # ).run(sender = alice, amount = sp.tez(69), valid=False)
 
-    scenario.p("Alice mints 2 token, with token_metadatas length != purchase_quantity, should be invalid - token_id = 3,4")
-    c1.mint(
-        token_metadatas = sp.list([tok3_md]),
-        purchase_quantity = 2
-    ).run(sender = alice, amount = sp.tez(69), valid=False)
+    # scenario.p("Alice mints 2 token, with token_metadatas length != purchase_quantity, should be invalid - token_id = 3,4")
+    # c1.mint(
+    #     token_metadatas = sp.list([tok3_md]),
+    #     purchase_quantity = 2
+    # ).run(sender = alice, amount = sp.tez(69), valid=False)
 
-    scenario.p("Bob try to mint 3 tokens in one txn, should fail")
-    c1.mint(
-        token_metadatas = sp.list([tok2_md, tok3_md, tok4_md]),
-        purchase_quantity = 3
-    ).run(sender = alice, amount = sp.tez(69*3), valid=False)
+    # scenario.p("Bob try to mint 3 tokens in one txn, should fail")
+    # c1.mint(
+    #     token_metadatas = sp.list([tok2_md, tok3_md, tok4_md]),
+    #     purchase_quantity = 3
+    # ).run(sender = alice, amount = sp.tez(69*3), valid=False)
     
