@@ -1,21 +1,131 @@
 import smartpy as sp
 
-# Error_message class is used to generate error messages throughout the contract
+#The FA2 Config class is used to set up basic configuration settings for the contract
+class FA2_config:
+    def __init__(self,
+                 debug_mode                         = False,
+                 single_asset                       = False,
+                 non_fungible                       = False,
+                 add_mutez_transfer                 = False,
+                 readable                           = True,
+                 force_layouts                      = True,
+                 support_operator                   = True,
+                 assume_consecutive_token_ids       = True,
+                 store_total_supply                 = True,
+                 lazy_entry_points                  = False,
+                 allow_self_transfer                = False,
+                 use_token_metadata_offchain_view   = False
+                 ):
+
+        if debug_mode:
+            self.my_map = sp.map
+        else:
+            self.my_map = sp.big_map
+        # The option `debug_mode` makes the code generation use
+        # regular maps instead of big-maps, hence it makes inspection
+        # of the state of the contract easier.
+
+        self.use_token_metadata_offchain_view = use_token_metadata_offchain_view
+        # Include offchain view for accessing the token metadata (requires TZIP-016 contract metadata)
+
+        self.single_asset = single_asset
+        # This makes the contract save some gas and storage by
+        # working only for the token-id `0`.
+
+        self.non_fungible = non_fungible
+        # Enforce the non-fungibility of the tokens, i.e. the fact
+        # that total supply has to be 1.
+
+        self.readable = readable
+        # The `readable` option is a legacy setting that we keep around
+        # only for benchmarking purposes.
+        #
+        # User-accounts are kept in a big-map:
+        # `(user-address * token-id) -> ownership-info`.
+        #
+        # For the Babylon protocol, one had to use `readable = False`
+        # in order to use `PACK` on the keys of the big-map.
+
+        self.force_layouts = force_layouts
+        # The specification requires all interface-fronting records
+        # and variants to be *right-combs;* we keep
+        # this parameter to be able to compare performance & code-size.
+
+        self.support_operator = support_operator
+        # The operator entry-points always have to be there, but there is
+        # definitely a use-case for having them completely empty (saving
+        # storage and gas when `support_operator` is `False).
+
+        self.assume_consecutive_token_ids = assume_consecutive_token_ids
+        # For a previous version of the TZIP specification, it was
+        # necessary to keep track of the set of all tokens in the contract.
+        #
+        # The set of tokens is for now still available; this parameter
+        # guides how to implement it:
+        # If `true` we don't need a real set of token ids, just to know how
+        # many there are.
+
+        self.store_total_supply = store_total_supply
+        # Whether to store the total-supply for each token (next to
+        # the token-metadata).
+
+        self.add_mutez_transfer = add_mutez_transfer
+        # Add an entry point for the administrator to transfer tez potentially
+        # in the contract's balance.
+
+        self.lazy_entry_points = lazy_entry_points
+        #
+        # Those are “compilation” options of SmartPy into Michelson.
+        #
+
+        self.allow_self_transfer = allow_self_transfer
+        # Authorize call of `transfer` entry_point from self
+        name = "FA2"
+        if debug_mode:
+            name += "-debug"
+        if single_asset:
+            name += "-single_asset"
+        if non_fungible:
+            name += "-nft"
+        if add_mutez_transfer:
+            name += "-mutez"
+        if not readable:
+            name += "-no_readable"
+        if not force_layouts:
+            name += "-no_layout"
+        if not support_operator:
+            name += "-no_ops"
+        if not assume_consecutive_token_ids:
+            name += "-no_toknat"
+        if not store_total_supply:
+            name += "-no_totsup"
+        if lazy_entry_points:
+            name += "-lep"
+        if allow_self_transfer:
+            name += "-self_transfer"
+        self.name = name
+
+## ## Auxiliary Classes and Values
+##
+## The definitions below implement SmartML-types and functions for various
+## important types.
+##
+token_id_type = sp.TNat
+
 class Error_message:
-    def __init__(self):
+    def __init__(self, config):
+        self.config = config
         self.prefix = "FA2_"
-
     def make(self, s): return (self.prefix + s)
-    def token_undefined(self): return self.make("TOKEN_UNDEFINED")
-    def insufficient_balance(self): return self.make("INSUFFICIENT_BALANCE")
-    def not_operator(self): return self.make("NOT_OPERATOR")
-    def not_owner(self): return self.make("NOT_OWNER")
+    def token_undefined(self):       return self.make("TOKEN_UNDEFINED")
+    def insufficient_balance(self):  return self.make("INSUFFICIENT_BALANCE")
+    def not_operator(self):          return self.make("NOT_OPERATOR")
+    def not_owner(self):             return self.make("NOT_OWNER")
     def operators_unsupported(self): return self.make("OPERATORS_UNSUPPORTED")
-    def not_admin(self): return self.make("NOT_ADMIN")
+    def not_admin(self):             return self.make("NOT_ADMIN")
     def not_admin_or_operator(self): return self.make("NOT_ADMIN_OR_OPERATOR")
-    def paused(self): return self.make("PAUSED")
+    def paused(self):                return self.make("PAUSED")
 
-# Kraznik_error_message is a class used to generate error messages specific to the Kraznik NFT contract
 class Kraznik_error_message:
     def __init__(self):
         self.prefix = "Kraznik_"
@@ -33,245 +143,908 @@ class Kraznik_error_message:
     def invalid(self): return self.make("INVALID")
 
 
+
+#Batch_transfer class is used to handle batching of token transfers
+# transfer type - 
+# {
+# from address,
+# list 
+# {
+# to address,
+# token ID,
+# amount
+# }
+
+
 class Batch_transfer:
     def __init__(self, config):
         self.config = config
-
     def get_transfer_type(self):
-        tx_type = sp.TRecord(to_=sp.TAddress,
-                             token_id=sp.TNat,
-                             amount=sp.TNat)
+        tx_type = sp.TRecord(to_ = sp.TAddress,
+                             token_id = token_id_type,
+                             amount = sp.TNat)
         if self.config.force_layouts:
             tx_type = tx_type.layout(
                 ("to_", ("token_id", "amount"))
             )
-        transfer_type = sp.TRecord(from_=sp.TAddress,
-                                   txs=sp.TList(tx_type)).layout(
+        transfer_type = sp.TRecord(from_ = sp.TAddress,
+                                   txs = sp.TList(tx_type)).layout(
                                        ("from_", "txs"))
+        #Transfer type -> (From, txs -> List of records (to, token ID, amount))
         return transfer_type
-
     def get_type(self):
+        #Returns a list of transfers
         return sp.TList(self.get_transfer_type())
-
     def item(self, from_, txs):
-        v = sp.record(from_=from_, txs=txs)
+        #Creates a transfer from the from address and the transaction
+        v = sp.record(from_ = from_, txs = txs)
         return sp.set_type_expr(v, self.get_transfer_type())
 
-# Ledger_key class is used to store the mapping between owner addresses and token IDs
-class Ledger_key:
+## `Operator_param` defines type types for the `%update_operators` entry-point.
+class Operator_param:
+    def __init__(self, config):
+        self.config = config
     def get_type(self):
-        return sp.TRecord(owner=sp.TAddress, token_id=sp.TNat).layout(("owner", "token_id"))
+        t = sp.TRecord(
+            owner = sp.TAddress,
+            operator = sp.TAddress,
+            token_id = token_id_type)
+        if self.config.force_layouts:
+            t = t.layout(("owner", ("operator", "token_id")))
+        return t
+    def make(self, owner, operator, token_id):
+        r = sp.record(owner = owner,
+                      operator = operator,
+                      token_id = token_id)
+        return sp.set_type_expr(r, self.get_type())
 
-    def make(self, owner, token_id):
-        return sp.set_type_expr(sp.record(owner=owner, token_id=token_id), self.get_type())
+#The class Ledger_key defines the key type for the main token ledger - stores the owner address and token ID
+class Ledger_key:
+    def __init__(self, config):
+        self.config = config
+    def make(self, user, token):
+        user = sp.set_type_expr(user, sp.TAddress)
+        token = sp.set_type_expr(token, token_id_type)
+        result = sp.pair(user, token)
+        return result
 
-#Balance_of class is used to handle all calls made to query the token balances of addresses
+## The link between operators and the addresses they operate is kept
+## in a *lazy set* of `(owner × operator × token-id)` values.
+##
+## A lazy set is a big-map whose keys are the elements of the set and
+## values are all `Unit`.
+class Operator_set:
+    def __init__(self, config):
+        self.config = config
+    def inner_type(self):
+        #The type of a record in the Operators set -> (owner address, operator address, token ID)
+        return sp.TRecord(owner = sp.TAddress,
+                          operator = sp.TAddress,
+                          token_id = token_id_type
+                          ).layout(("owner", ("operator", "token_id")))
+    def key_type(self):
+        if self.config.readable:
+            return self.inner_type()
+        else:
+            return sp.TBytes
+    def make(self):
+        return self.config.my_map(tkey = self.key_type(), tvalue = sp.TUnit)
+    def make_key(self, owner, operator, token_id):
+        metakey = sp.record(owner = owner,
+                            operator = operator,
+                            token_id = token_id)
+        metakey = sp.set_type_expr(metakey, self.inner_type())
+        if self.config.readable:
+            return metakey
+        else:
+            return sp.pack(metakey)
+    def add(self, set, owner, operator, token_id):
+        set[self.make_key(owner, operator, token_id)] = sp.unit
+    def remove(self, set, owner, operator, token_id):
+        del set[self.make_key(owner, operator, token_id)]
+    def is_member(self, set, owner, operator, token_id):
+        return set.contains(self.make_key(owner, operator, token_id))
+
 class Balance_of:
+    #Record of (Owner address and Token ID)
     def request_type():
         return sp.TRecord(
-            owner=sp.TAddress,
-            token_id=sp.TNat).layout(("owner", "token_id"))
-
+            owner = sp.TAddress,
+            token_id = token_id_type).layout(("owner", "token_id"))
+    #List of records of ( Record(Owner Address, Token ID), Balance)
     def response_type():
         return sp.TList(
             sp.TRecord(
-                request=Balance_of.request_type(),
-                balance=sp.TNat).layout(("request", "balance")))
-
+                request = Balance_of.request_type(),
+                balance = sp.TNat).layout(("request", "balance")))
+    #Record of Contract (Response_type) and List of Requests
     def entry_point_type():
         return sp.TRecord(
-            callback=sp.TContract(Balance_of.response_type()),
-            requests=sp.TList(Balance_of.request_type())
+            callback = sp.TContract(Balance_of.response_type()),
+            requests = sp.TList(Balance_of.request_type())
         ).layout(("requests", "callback"))
 
-#Attributes contains the list of traits, along with their values and rarities
-class Attributes:
-    def get_type(self):
-        return sp.TRecord(name=sp.TString, value=sp.TString, rarity=sp.TNat)
-    def make(self, attributes):
-        attributes_list = sp.local("Attributes_List", sp.list(l=[], t=self.get_type()))
-        sp.for attr in attributes:
-            attributes_list.value.push(attr)
-        return attributes_list.value
-
-
-
-#Tags contains the list of tags that describe the subject or content of the asset.
-class Tags:
-    def get_type(self):
-        return sp.TList(t=sp.TString)
-    def make(self, tags):
-        return sp.set_type_expr(tags, self.get_type())
-
-# Token metadata containing the following fields - 
-# 1. Token id
-# 2. Description
-# 3. Date
-# 4. Tags
-# 5. Artifact URI
-# 6. Attributes
 class Token_meta_data:
-    def get_type(self):
-        attributes_inst = Attributes()
-        tags_inst = Tags()
-        return sp.TRecord(token_id=sp.TNat, description=sp.TString, date=sp.TTimestamp, artifactUri=sp.TString, tags=tags_inst.get_type(), attributes=sp.TList(attributes_inst.get_type()))
-    def make(self, token_metadata):
-        return sp.set_type_expr(token_metadata, self.get_type())
+    def __init__(self, config):
+        self.config = config
 
-#KraznikCollections is the core contract in the application - Consists of an ownership ledger, token_meta_data map
-class KraznikCollections(sp.Contract):
-    def __init__(self, metadata, admin):
-        self.ledger_key = Ledger_key()
-        self.error_message = Error_message()
+    def get_type(self):
+        return sp.TRecord(token_id = sp.TNat, token_info = sp.TBigMap(sp.TString, sp.TBytes))
+
+    def set_type_and_layout(self, expr):
+        sp.set_type(expr, self.get_type())
+
+# The set of all token IDs (We are maintaining a set even though token IDs are consecutive)
+class Token_id_set:
+    #TODO - Remove if not required
+    def __init__(self, config):
+        self.config = config
+    def empty(self):
+        return sp.set(t = token_id_type)
+    def add(self, metaset, v):
+        metaset.add(v)
+    def contains(self, metaset, v):
+        return metaset.contains(v)
+    def cardinal(self, metaset):
+        return sp.len(metaset)
+
+
+def mutez_transfer(contract, params):
+    sp.verify(sp.sender == contract.data.administrator)
+    sp.set_type(params.destination, sp.TAddress)
+    sp.set_type(params.amount, sp.TMutez)
+    sp.send(params.destination, params.amount)
+
+
+class FA2_core(sp.Contract):
+    def __init__(self, config, metadata, **extra_storage):
+        self.config = config
+        self.error_message = Error_message(self.config)
         self.kraznik_error_message = Kraznik_error_message()
-        self.token_meta_data = Token_meta_data()
+        self.operator_set = Operator_set(self.config)
+        self.operator_param = Operator_param(self.config)
+        self.token_id_set = Token_id_set(self.config)
+        self.ledger_key = Ledger_key(self.config)
+        self.token_meta_data = Token_meta_data(self.config)
+        self.batch_transfer    = Batch_transfer(self.config)
+        if  self.config.add_mutez_transfer:
+            self.transfer_mutez = sp.entry_point(mutez_transfer)
+        if config.lazy_entry_points:
+            self.add_flag("lazy-entry-points")
+        self.add_flag("initial-cast")
+        self.exception_optimization_level = "default-line"
         self.init(
-            ledger=sp.big_map(tkey=self.ledger_key.get_type(), tvalue=sp.TNat),
-            paused=False,
-            administrator=admin,
-            metadata=metadata,      #Core Contract Metadata
-            all_tokens=sp.set(t=sp.TNat),
-            tokens = sp.big_map(tkey=sp.TNat, tvalue=self.token_meta_data.get_type()),
-            MAX_SUPPLY=10000,       #Maximum supply quantity of the NFTs
-            MAX_PURCHASE=2,         #Maximum purchase allowed for each user
-            AMOUNT_RESERVED=100,    #Number of NFTs reserved for the team members
-            MINT_PRICE=sp.tez(69),  #Initial mint price of the NFTs (in XTZ)
-            RENAME_PRICE=sp.tez(1), #Price needed to rename the NFTs
+            ledger = self.config.my_map(tvalue = sp.TNat),
+            token_metadata = self.config.my_map(tkey = sp.TNat, tvalue = self.token_meta_data.get_type()),
+            operators = self.operator_set.make(),
+            all_tokens = self.token_id_set.empty(),
+            metadata = metadata,
+            max_supply=10000,
+            max_purchase=2,
+            mint_price=sp.tez(69),
+            base_uri="ipfs//:undefined",
+            #TODO Add rename price if required
+            **extra_storage
         )
 
+        if self.config.store_total_supply:
+            self.update_initial_storage(
+                total_supply = self.config.my_map(tkey = sp.TNat, tvalue = sp.TNat),
+            )
+
+    @sp.entry_point
+    def transfer(self, params):
+        #Ensures that the contract has not been paused
+        sp.verify( ~self.is_paused(), message = self.error_message.paused() )
+        #List of transfers, where each transfer is  (from, txs -> (to, token ID, amount))
+        sp.set_type(params, self.batch_transfer.get_type())
+        sp.for transfer in params:
+           current_from = transfer.from_
+           sp.for tx in transfer.txs:
+                #Ensures that ONLY the from address or the contract admin can send this transaction
+                sender_verify = ((self.is_administrator(sp.sender)) |
+                                (current_from == sp.sender))
+                message = self.error_message.not_owner()
+                #If the contract supports operators, this checks whether the sender of the transaction is a valid operator
+                if self.config.support_operator:
+                    message = self.error_message.not_operator()
+                    sender_verify |= (self.operator_set.is_member(self.data.operators,
+                                                                  current_from,
+                                                                  sp.sender,
+                                                                  tx.token_id))
+                #If transfer function can be called from the contract itself
+                if self.config.allow_self_transfer:
+                    sender_verify |= (sp.sender == sp.self_address)
+                sp.verify(sender_verify, message = message)
+                #Checks if the token metadata is valid
+                sp.verify(
+                    self.data.token_metadata.contains(tx.token_id),
+                    message = self.error_message.token_undefined()
+                )
+                # If amount is 0 we do nothing now:
+                #Otherwise, changes to the balances of the to and from user are made
+                sp.if (tx.amount > 0):
+                    from_user = self.ledger_key.make(current_from, tx.token_id)
+                    sp.verify(
+                        (self.data.ledger[from_user] >= tx.amount),
+                        message = self.error_message.insufficient_balance())
+                    to_user = self.ledger_key.make(tx.to_, tx.token_id)
+                    self.data.ledger[from_user] = sp.as_nat(
+                        self.data.ledger[from_user] - tx.amount)
+                    sp.if self.data.ledger.contains(to_user):
+                        self.data.ledger[to_user] += tx.amount
+                    sp.else:
+                         self.data.ledger[to_user] = tx.amount
+                sp.else:
+                    pass
+
+    @sp.entry_point
+    def balance_of(self, params):
+
+        sp.verify( ~self.is_paused(), message = self.error_message.paused())
+        sp.set_type(params, Balance_of.entry_point_type())
+        
+        def f_process_request(req):
+            user = self.ledger_key.make(req.owner, req.token_id)
+            sp.verify(self.data.token_metadata.contains(req.token_id), message = self.error_message.token_undefined())
+            sp.if self.data.ledger.contains(user):
+                balance = self.data.ledger[user]
+                sp.result(
+                    sp.record(
+                        request = sp.record(
+                            owner = sp.set_type_expr(req.owner, sp.TAddress),
+                            token_id = sp.set_type_expr(req.token_id, sp.TNat)),
+                        balance = balance))
+            sp.else:
+                sp.result(
+                    sp.record(
+                        request = sp.record(
+                            owner = sp.set_type_expr(req.owner, sp.TAddress),
+                            token_id = sp.set_type_expr(req.token_id, sp.TNat)),
+                        balance = 0))
+        res = sp.local("responses", params.requests.map(f_process_request))
+        destination = sp.set_type_expr(params.callback, sp.TContract(Balance_of.response_type()))
+        sp.transfer(res.value, sp.mutez(0), destination)
+
+    @sp.offchain_view(pure = True)
+    def get_balance(self, req):
+        """This is the `get_balance` view defined in TZIP-12."""
+        sp.set_type(
+            req, sp.TRecord(
+                owner = sp.TAddress,
+                token_id = sp.TNat
+            ).layout(("owner", "token_id")))
+        user = self.ledger_key.make(req.owner, req.token_id)
+        sp.verify(self.data.token_metadata.contains(req.token_id), message = self.error_message.token_undefined())
+        sp.result(self.data.ledger[user])
+
+    #Used to add/remove operators
+    @sp.entry_point
+    def update_operators(self, params):
+        sp.set_type(params, sp.TList(
+            sp.TVariant(
+                add_operator = self.operator_param.get_type(),
+                remove_operator = self.operator_param.get_type()
+            )
+        ))
+        if self.config.support_operator:
+            sp.for update in params:
+                with update.match_cases() as arg:
+                    with arg.match("add_operator") as upd:
+                        sp.verify(
+                            (upd.owner == sp.sender) | self.is_administrator(sp.sender),
+                            message = self.error_message.not_admin_or_operator()
+                        )
+                        self.operator_set.add(self.data.operators,
+                                              upd.owner,
+                                              upd.operator,
+                                              upd.token_id)
+                    with arg.match("remove_operator") as upd:
+                        sp.verify(
+                            (upd.owner == sp.sender) | self.is_administrator(sp.sender),
+                            message = self.error_message.not_admin_or_operator()
+                        )
+                        self.operator_set.remove(self.data.operators,
+                                                 upd.owner,
+                                                 upd.operator,
+                                                 upd.token_id)
+        else:
+            sp.failwith(self.error_message.operators_unsupported())
+
+    # this is not part of the standard but can be supported through inheritance.
+    def is_paused(self):
+        return sp.bool(False)
+
+    # this is not part of the standard but can be supported through inheritance.
+    def is_administrator(self, sender):
+        return sp.bool(False)
+#Class to handle the admin address of the FA2 contract
+class FA2_administrator(FA2_core):
     def is_administrator(self, sender):
         return sender == self.data.administrator
 
     @sp.entry_point
     def set_administrator(self, params):
-        sp.verify(self.is_administrator(sp.sender),
-                  message=self.error_message.not_owner())
+        sp.verify(self.is_administrator(sp.sender), message = self.error_message.not_admin())
         self.data.administrator = params
 
+#Class to handle pausing the FA2 contract
+class FA2_pause(FA2_core):
     def is_paused(self):
         return self.data.paused
 
     @sp.entry_point
     def set_pause(self, params):
-        sp.verify(self.is_administrator(sp.sender),
-                  message=self.error_message.not_owner())
+        sp.verify(self.is_administrator(sp.sender), message = self.error_message.not_admin())
         self.data.paused = params
 
-    #Function to "mint" an NFT - verifies that the contract is not paused
+class FA2_change_metadata(FA2_core):
     @sp.entry_point
-    def mint(self, tokens_metadata, purchase_quantity):
-        sp.verify(~self.is_paused(), self.error_message.paused())
-        
-        #Sets the type for the "purchase quantity" and "token metadata" for multiple tokens
-        sp.set_type(tokens_metadata, sp.TList(self.token_meta_data.get_type()))
-        sp.set_type(purchase_quantity, sp.TNat)
+    def set_metadata(self, k, v):
+        sp.verify(self.is_administrator(sp.sender), message = self.error_message.not_admin())
+        self.data.metadata[k] = v
 
-        # token_id starting from 0-9999
-        token_id = sp.len(self.data.all_tokens)
+class FA2_mint(FA2_core):
+    @sp.entry_point
+    def mint(self, params):
         
-        sp.verify(purchase_quantity > 0)
-        sp.verify(sp.len(tokens_metadata) == purchase_quantity,
-                  message=self.kraznik_error_message.invalid())
-        sp.verify(purchase_quantity <= self.data.MAX_PURCHASE,
+        sp.verify( ~self.is_paused(), message = self.error_message.paused())
+        #Gets the token ID of the next NFT to be minted
+        token_id = self.token_id_set.cardinal(self.data.all_tokens)
+        sp.verify(params.purchase_quantity > 0)
+        sp.verify(params.purchase_quantity <= self.data.max_purchase,
                   message=self.kraznik_error_message.cant_purchase_more())
-        sp.verify(token_id + purchase_quantity <= self.data.MAX_SUPPLY,
+        sp.verify(token_id + params.purchase_quantity <= self.data.max_supply,
                   message=self.kraznik_error_message.exceeded_max_supply())
-        sp.verify(sp.amount == sp.mul(purchase_quantity, self.data.MINT_PRICE),
+        sp.verify(sp.amount == sp.mul(params.purchase_quantity, self.data.mint_price),
                   message=self.kraznik_error_message.insufficient_amount_paid())
-        sp.for token_metadata in tokens_metadata:
-            token_id = sp.len(self.data.all_tokens)
-            user = self.ledger_key.make(sp.sender, token_id)
-            self.data.ledger[user] = 1
-            #Compute hash of metadata object and check if hash of token_metadata exsist
-            self.data.tokens[token_id] = self.token_meta_data.make(token_metadata)
-            self.data.all_tokens.add(token_id)
+        user = self.ledger_key.make(sp.sender, params.purchase_quantity)
+        total_tokens = token_id + params.purchase_quantity
+        sp.while token_id <= total_tokens:
+           self.data.ledger[user] = 1
+           base_uri = self.data.base_uri
+           self.data.token_metadata[token_id] = sp.record(
+                token_id    = token_id,
+                token_info  = sp.utils.metadata_of_url("ipfs//:undefined")
+            )
+           
 
-        # we have to add tokenUri to the token metadata => TZIP-21
-        # we have to make assignment of tokenUris to tokenIds random (frontend)
-        # rather than non-consecutive minting of token-ids
+class FA2_token_metadata(FA2_core):
+    def set_token_metadata_view(self):
+        def token_metadata(self, tok):
+            sp.set_type(tok, sp.TNat)
+            sp.result(self.data.token_metadata[tok])
 
-    
+        self.token_metadata = sp.offchain_view(pure = True, doc = "Get Token Metadata")(token_metadata)
 
-@sp.add_test(name="Demo")
-def test():
-    scenario = sp.test_scenario()
-    scenario.h1("FA2 Contract name: " + "KraznikCollections")
-    scenario.table_of_contents()
-    admin = sp.test_account("Administrator")
-    alice = sp.test_account("Alice")
-    bob = sp.test_account("Bob")
+    def make_metadata(symbol, name, decimals):
+        "Helper function to build metadata JSON bytes values."
+        return (sp.map(l = {
+            # Remember that michelson wants map already in ordered
+            "decimals" : sp.utils.bytes_of_string("%d" % decimals),
+            "name" : sp.utils.bytes_of_string(name),
+            "symbol" : sp.utils.bytes_of_string(symbol)
+        }))
 
-    scenario.h2("Accounts")
-    scenario.show([admin, alice, bob])
-    c1 = KraznikCollections(
-        metadata=sp.utils.metadata_of_url("https://example.com"),
-        admin=admin.address
+
+class Kraznik(FA2_change_metadata, FA2_token_metadata, FA2_mint, FA2_administrator, FA2_pause, FA2_core):
+
+    @sp.offchain_view(pure = True)
+    def count_tokens(self):
+        """Get how many tokens are in this FA2 contract.
+        """
+        sp.result(self.token_id_set.cardinal(self.data.all_tokens))
+
+    @sp.offchain_view(pure = True)
+    def does_token_exist(self, tok):
+        "Ask whether a token ID is exists."
+        sp.set_type(tok, sp.TNat)
+        sp.result(self.data.token_metadata.contains(tok))
+
+    @sp.offchain_view(pure = True)
+    def all_tokens(self):
+       sp.result(self.data.all_tokens.elements())
+
+    @sp.offchain_view(pure = True)
+    def total_supply(self, tok):
+        if self.config.store_total_supply:
+            sp.result(self.data.total_supply[tok])
+        else:
+            sp.set_type(tok, sp.TNat)
+            sp.result("total-supply not supported")
+
+    @sp.offchain_view(pure = True)
+    def is_operator(self, query):
+        sp.set_type(query,
+                    sp.TRecord(token_id = sp.TNat,
+                               owner = sp.TAddress,
+                               operator = sp.TAddress).layout(
+                                   ("owner", ("operator", "token_id"))))
+        sp.result(
+            self.operator_set.is_member(self.data.operators,
+                                        query.owner,
+                                        query.operator,
+                                        query.token_id)
+        )
+
+    def __init__(self, config, metadata, admin):
+        # Let's show off some meta-programming:
+        if config.assume_consecutive_token_ids:
+            self.all_tokens.doc = """
+            This view is specified (but optional) in the standard.
+
+            This contract is built with assume_consecutive_token_ids =
+            True, so we return a list constructed from the number of tokens.
+            """
+        else:
+            self.all_tokens.doc = """
+            This view is specified (but optional) in the standard.
+
+            This contract is built with assume_consecutive_token_ids =
+            False, so we convert the set of tokens from the storage to a list
+            to fit the expected type of TZIP-16.
+            """
+        list_of_views = [
+            self.get_balance
+            , self.does_token_exist
+            , self.count_tokens
+            , self.all_tokens
+            , self.is_operator
+        ]
+
+        if config.store_total_supply:
+            list_of_views = list_of_views + [self.total_supply]
+        if config.use_token_metadata_offchain_view:
+            self.set_token_metadata_view()
+            list_of_views = list_of_views + [self.token_metadata]
+
+        metadata_base = {
+            "version": config.name # will be changed if using fatoo.
+            , "description" : (
+                "This is a didactic reference implementation of FA2,"
+                + " a.k.a. TZIP-012, using SmartPy.\n\n"
+                + "This particular contract uses the configuration named: "
+                + config.name + "."
+            )
+            , "interfaces": ["TZIP-012", "TZIP-016"]
+            , "authors": [
+                "Seb Mondet <https://seb.mondet.org>"
+            ]
+            , "homepage": "https://gitlab.com/smondet/fa2-smartpy"
+            , "views": list_of_views
+            , "source": {
+                "tools": ["SmartPy"]
+                , "location": "https://gitlab.com/smondet/fa2-smartpy.git"
+            }
+            , "permissions": {
+                "operator":
+                "owner-or-operator-transfer" if config.support_operator else "owner-transfer"
+                , "receiver": "owner-no-hook"
+                , "sender": "owner-no-hook"
+            }
+            , "fa2-smartpy": {
+                "configuration" :
+                dict([(k, getattr(config, k)) for k in dir(config) if "__" not in k and k != 'my_map'])
+            }
+        }
+        self.init_metadata("metadata_base", metadata_base)
+        FA2_core.__init__(self, config, metadata, paused = False, administrator = admin)
+
+
+
+
+
+
+
+
+
+
+## ## Tests
+##
+## ### Auxiliary Consumer Contract
+##
+## This contract is used by the tests to be on the receiver side of
+## callback-based entry-points.
+## It stores facts about the results in order to use `scenario.verify(...)`
+## (cf.
+##  [documentation](https://smartpy.io/docs/scenarios/testing)).
+class View_consumer(sp.Contract):
+    def __init__(self, contract):
+        self.contract = contract
+        self.init(last_sum = 0,
+                  operator_support =  not contract.config.support_operator)
+
+    @sp.entry_point
+    def reinit(self):
+        self.data.last_sum = 0
+        # It's also nice to make this contract have more than one entry point.
+
+    @sp.entry_point
+    def receive_balances(self, params):
+        sp.set_type(params, Balance_of.response_type())
+        self.data.last_sum = 0
+        sp.for resp in params:
+            self.data.last_sum += resp.balance
+
+## ### Generation of Test Scenarios
+##
+## Tests are also parametrized by the `FA2_config` object.
+## The best way to visualize them is to use the online IDE
+## (<https://www.smartpy.io/ide/>).
+def add_test(config, is_default = True):
+    @sp.add_test(name = config.name, is_default = is_default)
+    def test():
+        scenario = sp.test_scenario()
+        scenario.h1("FA2 Contract Name: " + config.name)
+        scenario.table_of_contents()
+        # sp.test_account generates ED25519 key-pairs deterministically:
+        admin = sp.test_account("Administrator")
+        alice = sp.test_account("Alice")
+        bob   = sp.test_account("Robert")
+        # Let's display the accounts:
+        scenario.h2("Accounts")
+        scenario.show([admin, alice, bob])
+        c1 = Kraznik(config = config,
+                 metadata = sp.utils.metadata_of_url("https://example.com"),
+                 admin = admin.address)
+        scenario += c1
+        if config.non_fungible:
+            # TODO
+            return
+        scenario.h2("Initial Minting")
+        scenario.p("The administrator mints 100 token-0's to Alice.")
+        tok0_md = Kraznik.make_metadata(
+            name = "The Token Zero",
+            decimals = 2,
+            symbol= "TK0" )
+        c1.mint(purchase_quantity = 2,
+        address = alice.address,
+                            amount = 100,
+                            metadata = tok0_md,
+                            token_id = 0).run(sender = admin)
+        scenario.h2("Transfers Alice -> Bob")
+        c1.transfer(
+            [
+                c1.batch_transfer.item(from_ = alice.address,
+                                    txs = [
+                                        sp.record(to_ = bob.address,
+                                                  amount = 10,
+                                                  token_id = 0)
+                                    ])
+            ]).run(sender = alice)
+        scenario.verify(
+            c1.data.ledger[c1.ledger_key.make(alice.address, 0)] == 90)
+        scenario.verify(
+            c1.data.ledger[c1.ledger_key.make(bob.address, 0)] == 10)
+        c1.transfer(
+            [
+                c1.batch_transfer.item(from_ = alice.address,
+                                    txs = [
+                                        sp.record(to_ = bob.address,
+                                                  amount = 10,
+                                                  token_id = 0),
+                                        sp.record(to_ = bob.address,
+                                                  amount = 11,
+                                                  token_id = 0)
+                                    ])
+            ]).run(sender = alice)
+        scenario.verify(
+            c1.data.ledger[c1.ledger_key.make(alice.address, 0)] == 90 - 10 - 11
+        )
+        scenario.verify(
+            c1.data.ledger[c1.ledger_key.make(bob.address, 0)]
+            == 10 + 10 + 11)
+        if config.single_asset:
+            return
+        scenario.h2("More Token Types")
+        tok1_md = FA2.make_metadata(
+            name = "The Second Token",
+            decimals = 0,
+            symbol= "TK1" )
+        c1.mint(address = bob.address,
+                            amount = 100,
+                            metadata = tok1_md,
+                            token_id = 1).run(sender = admin)
+        tok2_md = FA2.make_metadata(
+            name = "The Token Number Three",
+            decimals = 0,
+            symbol= "TK2" )
+        c1.mint(address = bob.address,
+                            amount = 200,
+                            metadata = tok2_md,
+                            token_id = 2).run(sender = admin)
+        scenario.h3("Multi-token Transfer Bob -> Alice")
+        c1.transfer(
+            [
+                c1.batch_transfer.item(from_ = bob.address,
+                                    txs = [
+                                        sp.record(to_ = alice.address,
+                                                  amount = 10,
+                                                  token_id = 0),
+                                        sp.record(to_ = alice.address,
+                                                  amount = 10,
+                                                  token_id = 1)]),
+                # We voluntarily test a different sub-batch:
+                c1.batch_transfer.item(from_ = bob.address,
+                                    txs = [
+                                        sp.record(to_ = alice.address,
+                                                  amount = 10,
+                                                  token_id = 2)])
+            ]).run(sender = bob)
+        scenario.h2("Other Basic Permission Tests")
+        scenario.h3("Bob cannot transfer Alice's tokens.")
+        c1.transfer(
+            [
+                c1.batch_transfer.item(from_ = alice.address,
+                                    txs = [
+                                        sp.record(to_ = bob.address,
+                                                  amount = 10,
+                                                  token_id = 0),
+                                        sp.record(to_ = bob.address,
+                                                  amount = 1,
+                                                  token_id = 0)])
+            ]).run(sender = bob, valid = False)
+        scenario.h3("Admin can transfer anything.")
+        c1.transfer(
+            [
+                c1.batch_transfer.item(from_ = alice.address,
+                                    txs = [
+                                        sp.record(to_ = bob.address,
+                                                  amount = 10,
+                                                  token_id = 0),
+                                        sp.record(to_ = bob.address,
+                                                  amount = 10,
+                                                  token_id = 1)]),
+                c1.batch_transfer.item(from_ = bob.address,
+                                    txs = [
+                                        sp.record(to_ = alice.address,
+                                                  amount = 11,
+                                                  token_id = 0)])
+            ]).run(sender = admin)
+        scenario.h3("Even Admin cannot transfer too much.")
+        c1.transfer(
+            [
+                c1.batch_transfer.item(from_ = alice.address,
+                                    txs = [
+                                        sp.record(to_ = bob.address,
+                                                  amount = 1000,
+                                                  token_id = 0)])
+            ]).run(sender = admin, valid = False)
+        scenario.h3("Consumer Contract for Callback Calls.")
+        consumer = View_consumer(c1)
+        scenario += consumer
+        scenario.p("Consumer virtual address: "
+                   + consumer.address.export())
+        scenario.h2("Balance-of.")
+        def arguments_for_balance_of(receiver, reqs):
+            return (sp.record(
+                callback = sp.contract(
+                    Balance_of.response_type(),
+                    receiver.address,
+                    entry_point = "receive_balances").open_some(),
+                requests = reqs))
+        c1.balance_of(arguments_for_balance_of(consumer, [
+            sp.record(owner = alice.address, token_id = 0),
+            sp.record(owner = alice.address, token_id = 1),
+            sp.record(owner = alice.address, token_id = 2)
+        ]))
+        scenario.verify(consumer.data.last_sum == 90)
+        scenario.h2("Operators")
+        if not c1.config.support_operator:
+            scenario.h3("This version was compiled with no operator support")
+            scenario.p("Calls should fail even for the administrator:")
+            c1.update_operators([]).run(sender = admin, valid = False)
+        else:
+            scenario.p("This version was compiled with operator support.")
+            scenario.p("Calling 0 updates should work:")
+            c1.update_operators([]).run()
+            scenario.h3("Operator Accounts")
+            op0 = sp.test_account("Operator0")
+            op1 = sp.test_account("Operator1")
+            op2 = sp.test_account("Operator2")
+            scenario.show([op0, op1, op2])
+            scenario.p("Admin can change Alice's operator.")
+            c1.update_operators([
+                sp.variant("add_operator", c1.operator_param.make(
+                    owner = alice.address,
+                    operator = op1.address,
+                    token_id = 0)),
+                sp.variant("add_operator", c1.operator_param.make(
+                    owner = alice.address,
+                    operator = op1.address,
+                    token_id = 2))
+            ]).run(sender = admin)
+            scenario.p("Operator1 can now transfer Alice's tokens 0 and 2")
+            c1.transfer(
+                [
+                    c1.batch_transfer.item(from_ = alice.address,
+                                        txs = [
+                                            sp.record(to_ = bob.address,
+                                                      amount = 2,
+                                                      token_id = 0),
+                                            sp.record(to_ = op1.address,
+                                                      amount = 2,
+                                                      token_id = 2)])
+                ]).run(sender = op1)
+            scenario.p("Operator1 cannot transfer Bob's tokens")
+            c1.transfer(
+                [
+                    c1.batch_transfer.item(from_ = bob.address,
+                                        txs = [
+                                            sp.record(to_ = op1.address,
+                                                      amount = 2,
+                                                      token_id = 1)])
+                ]).run(sender = op1, valid = False)
+            scenario.p("Operator2 cannot transfer Alice's tokens")
+            c1.transfer(
+                [
+                    c1.batch_transfer.item(from_ = alice.address,
+                                        txs = [
+                                            sp.record(to_ = bob.address,
+                                                      amount = 2,
+                                                      token_id = 1)])
+                ]).run(sender = op2, valid = False)
+            scenario.p("Alice can remove their operator")
+            c1.update_operators([
+                sp.variant("remove_operator", c1.operator_param.make(
+                    owner = alice.address,
+                    operator = op1.address,
+                    token_id = 0)),
+                sp.variant("remove_operator", c1.operator_param.make(
+                    owner = alice.address,
+                    operator = op1.address,
+                    token_id = 0))
+            ]).run(sender = alice)
+            scenario.p("Operator1 cannot transfer Alice's tokens any more")
+            c1.transfer(
+                [
+                    c1.batch_transfer.item(from_ = alice.address,
+                                        txs = [
+                                            sp.record(to_ = op1.address,
+                                                      amount = 2,
+                                                      token_id = 1)])
+                ]).run(sender = op1, valid = False)
+            scenario.p("Bob can add Operator0.")
+            c1.update_operators([
+                sp.variant("add_operator", c1.operator_param.make(
+                    owner = bob.address,
+                    operator = op0.address,
+                    token_id = 0)),
+                sp.variant("add_operator", c1.operator_param.make(
+                    owner = bob.address,
+                    operator = op0.address,
+                    token_id = 1))
+            ]).run(sender = bob)
+            scenario.p("Operator0 can transfer Bob's tokens '0' and '1'")
+            c1.transfer(
+                [
+                    c1.batch_transfer.item(from_ = bob.address,
+                                        txs = [
+                                            sp.record(to_ = alice.address,
+                                                      amount = 1,
+                                                      token_id = 0)]),
+                    c1.batch_transfer.item(from_ = bob.address,
+                                        txs = [
+                                            sp.record(to_ = alice.address,
+                                                      amount = 1,
+                                                      token_id = 1)])
+                ]).run(sender = op0)
+            scenario.p("Bob cannot add Operator0 for Alice's tokens.")
+            c1.update_operators([
+                sp.variant("add_operator", c1.operator_param.make(
+                    owner = alice.address,
+                    operator = op0.address,
+                    token_id = 0
+                ))
+            ]).run(sender = bob, valid = False)
+            scenario.p("Alice can also add Operator0 for their tokens 0.")
+            c1.update_operators([
+                sp.variant("add_operator", c1.operator_param.make(
+                    owner = alice.address,
+                    operator = op0.address,
+                    token_id = 0
+                ))
+            ]).run(sender = alice, valid = True)
+            scenario.p("Operator0 can now transfer Bob's and Alice's 0-tokens.")
+            c1.transfer(
+                [
+                    c1.batch_transfer.item(from_ = bob.address,
+                                        txs = [
+                                            sp.record(to_ = alice.address,
+                                                      amount = 1,
+                                                      token_id = 0)]),
+                    c1.batch_transfer.item(from_ = alice.address,
+                                        txs = [
+                                            sp.record(to_ = bob.address,
+                                                      amount = 1,
+                                                      token_id = 0)])
+                ]).run(sender = op0)
+            scenario.p("Bob adds Operator2 as second operator for 0-tokens.")
+            c1.update_operators([
+                sp.variant("add_operator", c1.operator_param.make(
+                    owner = bob.address,
+                    operator = op2.address,
+                    token_id = 0
+                ))
+            ]).run(sender = bob, valid = True)
+            scenario.p("Operator0 and Operator2 can transfer Bob's 0-tokens.")
+            c1.transfer(
+                [
+                    c1.batch_transfer.item(from_ = bob.address,
+                                        txs = [
+                                            sp.record(to_ = alice.address,
+                                                      amount = 1,
+                                                      token_id = 0)])
+                ]).run(sender = op0)
+            c1.transfer(
+                [
+                    c1.batch_transfer.item(from_ = bob.address,
+                                        txs = [
+                                            sp.record(to_ = alice.address,
+                                                      amount = 1,
+                                                      token_id = 0)])
+                ]).run(sender = op2)
+            scenario.table_of_contents()
+
+##
+## ## Global Environment Parameters
+##
+## The build system communicates with the python script through
+## environment variables.
+## The function `environment_config` creates an `FA2_config` given the
+## presence and values of a few environment variables.
+def global_parameter(env_var, default):
+    try:
+        if os.environ[env_var] == "true" :
+            return True
+        if os.environ[env_var] == "false" :
+            return False
+        return default
+    except:
+        return default
+
+def environment_config():
+    return FA2_config(
+        debug_mode = global_parameter("debug_mode", False),
+        single_asset = global_parameter("single_asset", False),
+        non_fungible = global_parameter("non_fungible", False),
+        add_mutez_transfer = global_parameter("add_mutez_transfer", False),
+        readable = global_parameter("readable", True),
+        force_layouts = global_parameter("force_layouts", True),
+        support_operator = global_parameter("support_operator", True),
+        assume_consecutive_token_ids =
+            global_parameter("assume_consecutive_token_ids", True),
+        store_total_supply = global_parameter("store_total_supply", False),
+        lazy_entry_points = global_parameter("lazy_entry_points", False),
+        allow_self_transfer = global_parameter("allow_self_transfer", False),
+        use_token_metadata_offchain_view = global_parameter("use_token_metadata_offchain_view", True),
     )
-    scenario += c1
-    scenario.h2("Initial minting")
-    scenario.p("Alice mints 1 token - token_id=0")
-    tags = sp.list(l = ["tag1","tag2"])
-    attributes = [sp.record(name="colour",value="Blue",rarity=100)]
-    tok0_md = sp.record(token_id=0, description=sp.string("Kangaroo"), artifactUri=sp.string("ipfsURL"), date=sp.timestamp(1630402450),tags=tags, attributes=attributes)
-    c1.mint(
-        tokens_metadata = [tok0_md],
-        purchase_quantity = 1
-    ).run(sender = alice, amount = sp.tez(69), valid = True)
 
-    ## Alice mints again, token_id = 1 is minted with same tok0_md
-    ## metadata needs to be different, someone can exploit using similar metadata, or any metadata
-    # c1.mint(
-    #     token_metadatas = sp.list([tok0_md]),
-    #     purchase_quantity = 1
-    # ).run(sender = alice, amount = sp.tez(69), valid = True)
+## ## Standard “main”
+##
+## This specific main uses the relative new feature of non-default tests
+## for the browser version.
+if "templates" not in __name__:
+    add_test(environment_config())
+    if not global_parameter("only_environment_test", False):
+        add_test(FA2_config(debug_mode = True), is_default = not sp.in_browser)
+        add_test(FA2_config(single_asset = True), is_default = not sp.in_browser)
+        add_test(FA2_config(non_fungible = True, add_mutez_transfer = True),
+                 is_default = not sp.in_browser)
+        add_test(FA2_config(readable = False), is_default = not sp.in_browser)
+        add_test(FA2_config(force_layouts = False),
+                 is_default = not sp.in_browser)
+        add_test(FA2_config(debug_mode = True, support_operator = False),
+                 is_default = not sp.in_browser)
+        add_test(FA2_config(assume_consecutive_token_ids = False)
+                 , is_default = not sp.in_browser)
+        add_test(FA2_config(store_total_supply = True)
+                 , is_default = not sp.in_browser)
+        add_test(FA2_config(add_mutez_transfer = True)
+                 , is_default = not sp.in_browser)
+        add_test(FA2_config(lazy_entry_points = True)
+                 , is_default = not sp.in_browser)
 
-    # scenario.p("Bob mints 2 token - token_id = 1,2")
-    # tok1_md = KraznikCollections.make_metadata(
-    #     name = "Kangaroo1",
-    #     symbol = "Kq1",
-    #     tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
-    # )
-    # tok2_md = KraznikCollections.make_metadata(
-    #     name = "Kangaroo2",
-    #     symbol = "Kq2",
-    #     tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
-    # )
-    # c1.mint(
-    #     token_metadatas = sp.list([tok1_md, tok2_md]),
-    #     purchase_quantity = 2
-    # ).run(sender = bob, amount = sp.tez(69*2), valid = True)
-
-    # scenario.p("Alice mints 2 token, with - token_id = 3,4, she already has token_id = 0")
-    # tok3_md = KraznikCollections.make_metadata(
-    #     name = "Kangaroo1",
-    #     symbol = "Kq1",
-    #     tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
-    # )
-    # tok4_md = KraznikCollections.make_metadata(
-    #     name = "Kangaroo2",
-    #     symbol = "Kq2",
-    #     tokenUri = "ipfs://QmV3a1TAdCncfs84Gi9msDsDJVQBDt6Wb5gJRVuFRfrgtG"
-    # )
-    # c1.mint(
-    #     token_metadatas = sp.list([tok3_md, tok4_md]),
-    #     purchase_quantity = 2
-    # ).run(sender = alice, amount = sp.tez(69*2), valid=True)
-
-    # scenario.p("Alice mints 2 token, but do not send right amount of tez, with - token_id = 3,4")
-    # c1.mint(
-    #     token_metadatas = sp.list([tok3_md, tok4_md]),
-    #     purchase_quantity = 2
-    # ).run(sender = alice, amount = sp.tez(69), valid=False)
-
-    # scenario.p("Alice mints 2 token, with token_metadatas length != purchase_quantity, should be invalid - token_id = 3,4")
-    # c1.mint(
-    #     token_metadatas = sp.list([tok3_md]),
-    #     purchase_quantity = 2
-    # ).run(sender = alice, amount = sp.tez(69), valid=False)
-
-    # scenario.p("Bob try to mint 3 tokens in one txn, should fail")
-    # c1.mint(
-    #     token_metadatas = sp.list([tok2_md, tok3_md, tok4_md]),
-    #     purchase_quantity = 3
-    # ).run(sender = alice, amount = sp.tez(69*3), valid=False)
-    
+    sp.add_compilation_target("FA2_comp", Kraznik(config = environment_config(),
+                              metadata = sp.utils.metadata_of_url("https://example.com"),
+                              admin = sp.address("tz1M9CMEtsXm3QxA7FmMU2Qh7xzsuGXVbcDr")))
