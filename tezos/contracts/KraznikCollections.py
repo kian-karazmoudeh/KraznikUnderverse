@@ -269,7 +269,7 @@ class Token_meta_data:
         self.config = config
 
     def get_type(self):
-        return sp.TRecord(token_id = sp.TNat, token_info = sp.TBigMap(sp.TString, sp.TBytes))
+        return sp.TRecord(token_id = sp.TNat, token_info = sp.TMap(sp.TString, sp.TBytes))
 
     def set_type_and_layout(self, expr):
         sp.set_type(expr, self.get_type())
@@ -640,21 +640,6 @@ class Kraznik(FA2_change_metadata, FA2_token_metadata, FA2_mint, FA2_administrat
 
 
 
-
-
-
-
-
-
-## ## Tests
-##
-## ### Auxiliary Consumer Contract
-##
-## This contract is used by the tests to be on the receiver side of
-## callback-based entry-points.
-## It stores facts about the results in order to use `scenario.verify(...)`
-## (cf.
-##  [documentation](https://smartpy.io/docs/scenarios/testing)).
 class View_consumer(sp.Contract):
     def __init__(self, contract):
         self.contract = contract
@@ -703,7 +688,7 @@ def add_test(config, is_default = True):
         scenario.p("Alice mints one token")
 
         c1.mint(purchase_quantity = 1).run(sender = alice, amount = sp.tez(69))
-        metadata = sp.list(sp.record(token_id = 0, token_info = sp.utils.metadata_of_url("ipfs//"))
+        metadata = sp.list(l = [sp.record(token_id = 0, token_info = sp.map({"" : sp.utils.bytes_of_string("ipfs//::")}))])
         c1.update_token_metadata(metadata = metadata).run(sender=admin)
         # scenario.h2("Transfers Alice -> Bob")
         # c1.transfer(
