@@ -503,11 +503,9 @@ class FA2_mint(FA2_core):
         sp.while token_id.value < total_tokens.value:
            user = self.ledger_key.make(sp.sender, token_id.value)
            self.data.ledger[user] = 1
+           self.token_id_set.add(self.data.all_tokens, token_id.value)
            token_id.value = token_id.value + 1
-        #    self.data.token_metadata[token_id] = sp.record(
-        #         token_id    = token_id,
-        #         token_info  = sp.utils.metadata_of_url("ipfs//:undefined")
-        #     )
+        
 
     @sp.entry_point
     def update_token_metadata(self, params):
@@ -687,292 +685,131 @@ def add_test(config, is_default = True):
         scenario.h2("Initial Minting")
         scenario.p("Alice mints one token")
 
+        #1. Basic mint test
         c1.mint(purchase_quantity = 1).run(sender = alice, amount = sp.tez(69))
+        
+        #2. Update token metadata test
         metadata = sp.list(l = [sp.record(token_id = 0, token_info = sp.map({"" : sp.utils.bytes_of_string("ipfs//::")}))])
         c1.update_token_metadata(metadata = metadata).run(sender=admin)
-        # scenario.h2("Transfers Alice -> Bob")
-        # c1.transfer(
-        #     [
-        #         c1.batch_transfer.item(from_ = alice.address,
-        #                             txs = [
-        #                                 sp.record(to_ = bob.address,
-        #                                           amount = 10,
-        #                                           token_id = 0)
-        #                             ])
-        #     ]).run(sender = alice)
-        # scenario.verify(
-        #     c1.data.ledger[c1.ledger_key.make(alice.address, 0)] == 90)
-        # scenario.verify(
-        #     c1.data.ledger[c1.ledger_key.make(bob.address, 0)] == 10)
-        # c1.transfer(
-        #     [
-        #         c1.batch_transfer.item(from_ = alice.address,
-        #                             txs = [
-        #                                 sp.record(to_ = bob.address,
-        #                                           amount = 10,
-        #                                           token_id = 0),
-        #                                 sp.record(to_ = bob.address,
-        #                                           amount = 11,
-        #                                           token_id = 0)
-        #                             ])
-        #     ]).run(sender = alice)
-        # scenario.verify(
-        #     c1.data.ledger[c1.ledger_key.make(alice.address, 0)] == 90 - 10 - 11
-        # )
-        # scenario.verify(
-        #     c1.data.ledger[c1.ledger_key.make(bob.address, 0)]
-        #     == 10 + 10 + 11)
-        # if config.single_asset:
-        #     return
-        # scenario.h2("More Token Types")
-        # tok1_md = FA2.make_metadata(
-        #     name = "The Second Token",
-        #     decimals = 0,
-        #     symbol= "TK1" )
-        # c1.mint(address = bob.address,
-        #                     amount = 100,
-        #                     metadata = tok1_md,
-        #                     token_id = 1).run(sender = admin)
-        # tok2_md = FA2.make_metadata(
-        #     name = "The Token Number Three",
-        #     decimals = 0,
-        #     symbol= "TK2" )
-        # c1.mint(address = bob.address,
-        #                     amount = 200,
-        #                     metadata = tok2_md,
-        #                     token_id = 2).run(sender = admin)
-        # scenario.h3("Multi-token Transfer Bob -> Alice")
-        # c1.transfer(
-        #     [
-        #         c1.batch_transfer.item(from_ = bob.address,
-        #                             txs = [
-        #                                 sp.record(to_ = alice.address,
-        #                                           amount = 10,
-        #                                           token_id = 0),
-        #                                 sp.record(to_ = alice.address,
-        #                                           amount = 10,
-        #                                           token_id = 1)]),
-        #         # We voluntarily test a different sub-batch:
-        #         c1.batch_transfer.item(from_ = bob.address,
-        #                             txs = [
-        #                                 sp.record(to_ = alice.address,
-        #                                           amount = 10,
-        #                                           token_id = 2)])
-        #     ]).run(sender = bob)
-        # scenario.h2("Other Basic Permission Tests")
-        # scenario.h3("Bob cannot transfer Alice's tokens.")
-        # c1.transfer(
-        #     [
-        #         c1.batch_transfer.item(from_ = alice.address,
-        #                             txs = [
-        #                                 sp.record(to_ = bob.address,
-        #                                           amount = 10,
-        #                                           token_id = 0),
-        #                                 sp.record(to_ = bob.address,
-        #                                           amount = 1,
-        #                                           token_id = 0)])
-        #     ]).run(sender = bob, valid = False)
-        # scenario.h3("Admin can transfer anything.")
-        # c1.transfer(
-        #     [
-        #         c1.batch_transfer.item(from_ = alice.address,
-        #                             txs = [
-        #                                 sp.record(to_ = bob.address,
-        #                                           amount = 10,
-        #                                           token_id = 0),
-        #                                 sp.record(to_ = bob.address,
-        #                                           amount = 10,
-        #                                           token_id = 1)]),
-        #         c1.batch_transfer.item(from_ = bob.address,
-        #                             txs = [
-        #                                 sp.record(to_ = alice.address,
-        #                                           amount = 11,
-        #                                           token_id = 0)])
-        #     ]).run(sender = admin)
-        # scenario.h3("Even Admin cannot transfer too much.")
-        # c1.transfer(
-        #     [
-        #         c1.batch_transfer.item(from_ = alice.address,
-        #                             txs = [
-        #                                 sp.record(to_ = bob.address,
-        #                                           amount = 1000,
-        #                                           token_id = 0)])
-        #     ]).run(sender = admin, valid = False)
-        # scenario.h3("Consumer Contract for Callback Calls.")
-        # consumer = View_consumer(c1)
-        # scenario += consumer
-        # scenario.p("Consumer virtual address: "
-        #            + consumer.address.export())
-        # scenario.h2("Balance-of.")
-        # def arguments_for_balance_of(receiver, reqs):
-        #     return (sp.record(
-        #         callback = sp.contract(
-        #             Balance_of.response_type(),
-        #             receiver.address,
-        #             entry_point = "receive_balances").open_some(),
-        #         requests = reqs))
-        # c1.balance_of(arguments_for_balance_of(consumer, [
-        #     sp.record(owner = alice.address, token_id = 0),
-        #     sp.record(owner = alice.address, token_id = 1),
-        #     sp.record(owner = alice.address, token_id = 2)
-        # ]))
-        # scenario.verify(consumer.data.last_sum == 90)
-        # scenario.h2("Operators")
-        # if not c1.config.support_operator:
-        #     scenario.h3("This version was compiled with no operator support")
-        #     scenario.p("Calls should fail even for the administrator:")
-        #     c1.update_operators([]).run(sender = admin, valid = False)
-        # else:
-        #     scenario.p("This version was compiled with operator support.")
-        #     scenario.p("Calling 0 updates should work:")
-        #     c1.update_operators([]).run()
-        #     scenario.h3("Operator Accounts")
-        #     op0 = sp.test_account("Operator0")
-        #     op1 = sp.test_account("Operator1")
-        #     op2 = sp.test_account("Operator2")
-        #     scenario.show([op0, op1, op2])
-        #     scenario.p("Admin can change Alice's operator.")
-        #     c1.update_operators([
-        #         sp.variant("add_operator", c1.operator_param.make(
-        #             owner = alice.address,
-        #             operator = op1.address,
-        #             token_id = 0)),
-        #         sp.variant("add_operator", c1.operator_param.make(
-        #             owner = alice.address,
-        #             operator = op1.address,
-        #             token_id = 2))
-        #     ]).run(sender = admin)
-        #     scenario.p("Operator1 can now transfer Alice's tokens 0 and 2")
-        #     c1.transfer(
-        #         [
-        #             c1.batch_transfer.item(from_ = alice.address,
-        #                                 txs = [
-        #                                     sp.record(to_ = bob.address,
-        #                                               amount = 2,
-        #                                               token_id = 0),
-        #                                     sp.record(to_ = op1.address,
-        #                                               amount = 2,
-        #                                               token_id = 2)])
-        #         ]).run(sender = op1)
-        #     scenario.p("Operator1 cannot transfer Bob's tokens")
-        #     c1.transfer(
-        #         [
-        #             c1.batch_transfer.item(from_ = bob.address,
-        #                                 txs = [
-        #                                     sp.record(to_ = op1.address,
-        #                                               amount = 2,
-        #                                               token_id = 1)])
-        #         ]).run(sender = op1, valid = False)
-        #     scenario.p("Operator2 cannot transfer Alice's tokens")
-        #     c1.transfer(
-        #         [
-        #             c1.batch_transfer.item(from_ = alice.address,
-        #                                 txs = [
-        #                                     sp.record(to_ = bob.address,
-        #                                               amount = 2,
-        #                                               token_id = 1)])
-        #         ]).run(sender = op2, valid = False)
-        #     scenario.p("Alice can remove their operator")
-        #     c1.update_operators([
-        #         sp.variant("remove_operator", c1.operator_param.make(
-        #             owner = alice.address,
-        #             operator = op1.address,
-        #             token_id = 0)),
-        #         sp.variant("remove_operator", c1.operator_param.make(
-        #             owner = alice.address,
-        #             operator = op1.address,
-        #             token_id = 0))
-        #     ]).run(sender = alice)
-        #     scenario.p("Operator1 cannot transfer Alice's tokens any more")
-        #     c1.transfer(
-        #         [
-        #             c1.batch_transfer.item(from_ = alice.address,
-        #                                 txs = [
-        #                                     sp.record(to_ = op1.address,
-        #                                               amount = 2,
-        #                                               token_id = 1)])
-        #         ]).run(sender = op1, valid = False)
-        #     scenario.p("Bob can add Operator0.")
-        #     c1.update_operators([
-        #         sp.variant("add_operator", c1.operator_param.make(
-        #             owner = bob.address,
-        #             operator = op0.address,
-        #             token_id = 0)),
-        #         sp.variant("add_operator", c1.operator_param.make(
-        #             owner = bob.address,
-        #             operator = op0.address,
-        #             token_id = 1))
-        #     ]).run(sender = bob)
-        #     scenario.p("Operator0 can transfer Bob's tokens '0' and '1'")
-        #     c1.transfer(
-        #         [
-        #             c1.batch_transfer.item(from_ = bob.address,
-        #                                 txs = [
-        #                                     sp.record(to_ = alice.address,
-        #                                               amount = 1,
-        #                                               token_id = 0)]),
-        #             c1.batch_transfer.item(from_ = bob.address,
-        #                                 txs = [
-        #                                     sp.record(to_ = alice.address,
-        #                                               amount = 1,
-        #                                               token_id = 1)])
-        #         ]).run(sender = op0)
-        #     scenario.p("Bob cannot add Operator0 for Alice's tokens.")
-        #     c1.update_operators([
-        #         sp.variant("add_operator", c1.operator_param.make(
-        #             owner = alice.address,
-        #             operator = op0.address,
-        #             token_id = 0
-        #         ))
-        #     ]).run(sender = bob, valid = False)
-        #     scenario.p("Alice can also add Operator0 for their tokens 0.")
-        #     c1.update_operators([
-        #         sp.variant("add_operator", c1.operator_param.make(
-        #             owner = alice.address,
-        #             operator = op0.address,
-        #             token_id = 0
-        #         ))
-        #     ]).run(sender = alice, valid = True)
-        #     scenario.p("Operator0 can now transfer Bob's and Alice's 0-tokens.")
-        #     c1.transfer(
-        #         [
-        #             c1.batch_transfer.item(from_ = bob.address,
-        #                                 txs = [
-        #                                     sp.record(to_ = alice.address,
-        #                                               amount = 1,
-        #                                               token_id = 0)]),
-        #             c1.batch_transfer.item(from_ = alice.address,
-        #                                 txs = [
-        #                                     sp.record(to_ = bob.address,
-        #                                               amount = 1,
-        #                                               token_id = 0)])
-        #         ]).run(sender = op0)
-        #     scenario.p("Bob adds Operator2 as second operator for 0-tokens.")
-        #     c1.update_operators([
-        #         sp.variant("add_operator", c1.operator_param.make(
-        #             owner = bob.address,
-        #             operator = op2.address,
-        #             token_id = 0
-        #         ))
-        #     ]).run(sender = bob, valid = True)
-        #     scenario.p("Operator0 and Operator2 can transfer Bob's 0-tokens.")
-        #     c1.transfer(
-        #         [
-        #             c1.batch_transfer.item(from_ = bob.address,
-        #                                 txs = [
-        #                                     sp.record(to_ = alice.address,
-        #                                               amount = 1,
-        #                                               token_id = 0)])
-        #         ]).run(sender = op0)
-        #     c1.transfer(
-        #         [
-        #             c1.batch_transfer.item(from_ = bob.address,
-        #                                 txs = [
-        #                                     sp.record(to_ = alice.address,
-        #                                               amount = 1,
-        #                                               token_id = 0)])
-        #         ]).run(sender = op2)
-        #     scenario.table_of_contents()
+        
+        #3. Transfer token from Alice -> Bob
+        scenario.h2("Transfers Alice -> Bob")
+        c1.transfer(
+            [
+                c1.batch_transfer.item(from_ = alice.address,
+                                    txs = [
+                                        sp.record(to_ = bob.address,
+                                                  amount = 1,
+                                                  token_id = 0)
+                                    ])
+            ]).run(sender = alice)
+        scenario.verify(
+            c1.data.ledger[c1.ledger_key.make(alice.address, 0)] == 0)
+        scenario.verify(
+            c1.data.ledger[c1.ledger_key.make(bob.address, 0)] == 1)
+       
+        # #4. Minting two more NFTs and transferring both
+        c1.mint(purchase_quantity = 2).run(sender = bob, amount = sp.tez(138))
+        metadata = sp.list(l = [sp.record(token_id = 1, token_info = sp.map({"" : sp.utils.bytes_of_string("ipfs//::")})), 
+        sp.record(token_id = 2, token_info = sp.map({"" : sp.utils.bytes_of_string("ipfs//::")}))])
+        c1.update_token_metadata(metadata = metadata).run(sender=admin)
+        scenario.h3("Multi-token Transfer Bob -> Alice")
+        c1.transfer(
+            [
+                c1.batch_transfer.item(from_ = bob.address,
+                                    txs = [
+                                        sp.record(to_ = alice.address,
+                                                  amount = 1,
+                                                  token_id = 1),
+                                        sp.record(to_ = alice.address,
+                                                  amount = 1,
+                                                  token_id = 2)])
+            ]).run(sender = bob)
+        
+        #5. You cannot transfer another user's tokens
+        scenario.h3("Bob cannot transfer Alice's tokens.")
+        c1.transfer(
+            [
+                c1.batch_transfer.item(from_ = alice.address,
+                                    txs = [
+                                        sp.record(to_ = bob.address,
+                                                  amount = 1,
+                                                  token_id = 0)]),
+                 c1.batch_transfer.item(from_ = bob.address,
+                                    txs = [
+                                        sp.record(to_ = alice.address,
+                                                  amount = 1,
+                                                  token_id = 1)])
+            ]).run(sender = bob, valid = False)
+        
+        #6. Running balance_of
+        scenario.h3("Consumer Contract for Callback Calls.")
+        consumer = View_consumer(c1)
+        scenario += consumer
+        scenario.p("Consumer virtual address: "
+                   + consumer.address.export())
+        scenario.h2("Balance-of.")
+        def arguments_for_balance_of(receiver, reqs):
+            return (sp.record(
+                callback = sp.contract(
+                    Balance_of.response_type(),
+                    receiver.address,
+                    entry_point = "receive_balances").open_some(),
+                requests = reqs))
+        c1.balance_of(arguments_for_balance_of(consumer, [
+            sp.record(owner = alice.address, token_id = 0),
+            sp.record(owner = alice.address, token_id = 1),
+            sp.record(owner = alice.address, token_id = 2)
+        ]))
+
+        #7. Operator support
+        scenario.h2("Operators")
+        if not c1.config.support_operator:
+            scenario.h3("This version was compiled with no operator support")
+            scenario.p("Calls should fail even for the administrator:")
+            c1.update_operators([]).run(sender = admin, valid = False)
+        else:
+            scenario.p("This version was compiled with operator support.")
+            scenario.p("Calling 0 updates should work:")
+            c1.update_operators([]).run()
+            scenario.h3("Operator Accounts")
+            op0 = sp.test_account("Operator0")
+            op1 = sp.test_account("Operator1")
+            op2 = sp.test_account("Operator2")
+            scenario.show([op0, op1, op2])
+            scenario.p("Admin can change Alice's operator.")
+            c1.update_operators([
+                sp.variant("add_operator", c1.operator_param.make(
+                    owner = bob.address,
+                    operator = op1.address,
+                    token_id = 0)),
+                sp.variant("add_operator", c1.operator_param.make(
+                    owner = alice.address,
+                    operator = op1.address,
+                    token_id = 2))
+            ]).run(sender = admin)
+            
+
+            #Owners ->
+            # 0 -> Bob
+            # 1 -> Alice
+            # 2 -> Alice
+            scenario.p("Operator1 can now transfer tokens 0 and 2")
+            c1.transfer(
+                [
+                    c1.batch_transfer.item(from_ = bob.address,
+                                        txs = [
+                                            sp.record(to_ = alice.address,
+                                                      amount = 1,
+                                                      token_id = 0),
+                                           ]),
+                     c1.batch_transfer.item(from_ = alice.address,
+                                        txs = [
+                                            sp.record(to_ = op1.address,
+                                                      amount = 1,
+                                                      token_id = 2)])
+                ]).run(sender = op1)
+            scenario.table_of_contents()
 
 ##
 ## ## Global Environment Parameters
