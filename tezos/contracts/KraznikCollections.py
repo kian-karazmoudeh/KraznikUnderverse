@@ -142,7 +142,9 @@ class Kraznik_error_message:
 
     def invalid(self): return self.make("INVALID")
 
+    def presale_inactive(self): return self.make("PRESALE_INACTIVE")
 
+    def invalid_presale_owner(self): return self.make("NOT_AUTHORISED_FOR_PRESALE")
 
 #Batch_transfer class is used to handle batching of token transfers
 # transfer type - 
@@ -288,6 +290,21 @@ class Token_id_set:
     def cardinal(self, metaset):
         return sp.len(metaset)
 
+class Presale:
+    def _init__(self, config):
+        self.config = config
+    def get_type(self):
+        return sp.TMap(tkey = sp.TAddress, tvalue = sp.TNat)
+    def add_owner(self, owner, presale_map):
+        presale_map[owner] = 2
+    def is_owner(self, owner, presale_map):
+        return presale_map.contains(owner)
+    def tokens_left(self, owner, presale_map):
+        return presale_map[owner]
+    def update(self, owner, presale_map, tokens_left):
+        presale_map[owner] = tokens_left
+    def mint(self, owner, presale_map, tokens):
+        presale_map[owner] = presale_map[owner] - tokens
 
 def mutez_transfer(contract, params):
     sp.verify(sp.sender == contract.data.administrator)
@@ -307,6 +324,7 @@ class FA2_core(sp.Contract):
         self.ledger_key = Ledger_key(self.config)
         self.token_meta_data = Token_meta_data(self.config)
         self.batch_transfer    = Batch_transfer(self.config)
+        self.presale = Presale(self.config)
         if  self.config.add_mutez_transfer:
             self.transfer_mutez = sp.entry_point(mutez_transfer)
         if config.lazy_entry_points:
@@ -318,6 +336,7 @@ class FA2_core(sp.Contract):
             token_metadata = self.config.my_map(tkey = sp.TNat, tvalue = self.token_meta_data.get_type()),
             operators = self.operator_set.make(),
             all_tokens = self.token_id_set.empty(),
+            presale_map = self.config.my_map(tkey = sp.TAddress, tvalue = self.tNat),
             metadata = metadata,
             max_supply=10000,
             max_purchase=2,
@@ -331,6 +350,24 @@ class FA2_core(sp.Contract):
             self.update_initial_storage(
                 total_supply = self.config.my_map(tkey = sp.TNat, tvalue = sp.TNat),
             )
+
+    @sp.entry_point
+    def withdraw(self, amount):
+        sp.verify(self.is_administrator(sp.sender), message = self.error_message.not_owner())
+        sp.set_type(amount, sp.TMutez)
+        sp.send(sp.sender, amount)
+
+    @sp.entry_point
+    def add_presale_address(self, params):
+        sp.verify(self.is_administrator(sp.sender), message = self.error_message.not_owner())
+        sp.set_type(params.owner, sp.TAddress)
+        self.presale.add_owner(owner = params.owner, presale_map = self.data.presale_map)
+    
+    @sp.entry_point
+    def remove_presale_address(self, params):
+        sp.verify(self.is_administrator(sp.sender), message = self.error_message.not_owner())
+        sp.set_type(params.owner, sp.TAddress)
+        self.presale.update(owner = params.owner, presale_map = self.data.presale_map, tokens_left = 0)
 
     @sp.entry_point
     def transfer(self, params):
@@ -451,6 +488,14 @@ class FA2_core(sp.Contract):
         else:
             sp.failwith(self.error_message.operators_unsupported())
 
+    @sp.entry_point
+    def activate_presale(self):
+        self.data.presale_active = True
+
+    @sp.entry_point
+    def is_presale_active(self):
+        return self.data.presale_active
+
     # this is not part of the standard but can be supported through inheritance.
     def is_paused(self):
         return sp.bool(False)
@@ -488,7 +533,7 @@ class FA2_mint(FA2_core):
     @sp.entry_point
     def mint(self, params):
         
-        # sp.verify( ~self.is_paused(), message = self.error_message.paused())
+        sp.verify( ~self.is_paused(), message = self.error_message.paused())
         #Gets the token ID of the next NFT to be minted
         token_id = sp.local("token_id",self.token_id_set.cardinal(self.data.all_tokens))
         sp.verify(params.purchase_quantity > 0)
@@ -505,7 +550,27 @@ class FA2_mint(FA2_core):
            self.data.ledger[user] = 1
            self.token_id_set.add(self.data.all_tokens, token_id.value)
            token_id.value = token_id.value + 1
+
+    @sp.entry_point
+    def presale_mint(self, params):
+        sp.verify( self.is_presale_active(), message = self.kraznik_error_message.presale_inactive())
+        sp.verify( self.presale.is_owner(owner = sp.sender, presale_map = self.data.presale_map), message = self.kraznik_error_message.invalid_presale_owner)
+        token_id = sp.local("token_id",self.token_id_set.cardinal(self.data.all_tokens))
+        sp.verify(params.purchase_quantity > 0)
+        sp.verify(params.purchase_quantity <= self.presale.tokens_left(owner = sp.sender, presale_map = self.data.presale_map),
+                  message=self.kraznik_error_message.cant_purchase_more())
+        sp.verify(token_id.value + params.purchase_quantity <= self.data.max_supply,
+                  message=self.kraznik_error_message.exceeded_max_supply())
+        sp.verify(sp.amount >= sp.mul(self.data.mint_price, params.purchase_quantity),
+                  message=self.kraznik_error_message.insufficient_amount_paid())
         
+        total_tokens = sp.local("total_tokens",token_id.value + params.purchase_quantity)
+        sp.while token_id.value < total_tokens.value:
+           user = self.ledger_key.make(sp.sender, token_id.value)
+           self.data.ledger[user] = 1
+           self.token_id_set.add(self.data.all_tokens, token_id.value)
+           token_id.value = token_id.value + 1
+        self.data.presale.mint(owner = sp.sender, presale_map = self.data.presale_map, tokens = params.purchase_quantity)
 
     @sp.entry_point
     def update_token_metadata(self, params):
@@ -633,7 +698,7 @@ class Kraznik(FA2_change_metadata, FA2_token_metadata, FA2_mint, FA2_administrat
             }
         }
         self.init_metadata("metadata_base", metadata_base)
-        FA2_core.__init__(self, config, metadata, paused = False, administrator = admin)
+        FA2_core.__init__(self, config, metadata, paused = False, administrator = admin, presale_active = False)
 
 
 
